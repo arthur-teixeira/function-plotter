@@ -1,21 +1,20 @@
 #include "raylib.h"
-#include "raymath.h"
+#include "tinyexpr.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#define SAMPLE_RATE 1.0
+#define SAMPLE_RATE 0.1f
 #define ASPECT_RATIO (16.0f / 9.0f)
 
-Vector2 FlipY(Vector2 v, int height) {
-  return (Vector2){
-      .x = v.x,
-      .y = height - v.y,
-  };
+#define ARRAY_LEN(xs) sizeof(xs) / sizeof(*xs)
+
+double slope(double x1, double y1, double x2, double y2) {
+  return (y2 - y1) / (x2 - x1);
 }
 
 int main(void) {
-  const int screenWidth = 1920;
+  const int screenWidth = 1080;
   // const int screenWidth = 960;
   const int screenHeight = screenWidth / ASPECT_RATIO;
 
@@ -34,17 +33,60 @@ int main(void) {
   };
 
   size_t bufsize = ceil((screenWidth * 2) / SAMPLE_RATE);
+  Vector2 *samples = calloc(bufsize, sizeof(Vector2));
 
   Color strip_color = GRAY;
   strip_color.a /= 2;
+
+  char input[1000];
+  size_t letter_count = 0;
+
+  te_expr *expr = NULL;
 
   while (!WindowShouldClose()) {
     BeginDrawing();
     ClearBackground(BLACK);
 
+    int key;
+    if (IsKeyPressed(KEY_BACKSPACE)) {
+      letter_count--;
+      if (letter_count < 0)
+        letter_count = 0;
+      input[letter_count] = '\0';
+      printf("%s\n", input);
+    }
+
+    while ((key = GetCharPressed()) > 0) {
+      if ((key >= 32) && (key <= 125) && (letter_count < 1000)) {
+        input[letter_count] = (char)key;
+        input[letter_count + 1] = '\0';
+        letter_count++;
+      }
+
+      printf("%s\n", input);
+    }
+
+    double x;
+    te_variable vars[] = {
+        {"x", &x, TE_VARIABLE},
+    };
+
+    size_t num_vars = ARRAY_LEN(vars);
+
+    if (IsKeyPressed(KEY_ENTER)) {
+      printf("compiling %s\n", input);
+      int err;
+      expr = te_compile(input, vars, num_vars, &err);
+    }
+    if (IsKeyPressed(KEY_SPACE)) {
+      screen_center =
+          (Vector2){(float)screenWidth / 2, (float)screenHeight / 2};
+    }
+
     if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
       Vector2 d = GetMouseDelta();
-      screen_center = Vector2Add(screen_center, d);
+      screen_center.x += d.x;
+      screen_center.y += d.y;
     }
 
     float f;
@@ -55,6 +97,7 @@ int main(void) {
       }
     }
 
+    // Main axes
     DrawRectangle(screen_center.x, 0, 2, screenHeight, WHITE);
     DrawRectangle(0, screen_center.y, screenWidth, 2, WHITE);
 
@@ -62,7 +105,6 @@ int main(void) {
     int y_segments = screen_center.y / zoom + 1;
 
     // TODO: Draw more or less lines depending on zoom
-    // TODO: Move lines with the camera
     for (int i = 0; i < x_segments; i++) {
       int x1 = i * zoom + screen_center.x;
       DrawLine(x1, 0, x1, screenHeight, strip_color);
@@ -92,21 +134,32 @@ int main(void) {
       }
     }
 
-    Vector2 *samples = calloc(bufsize, sizeof(Vector2));
+    size_t i = 0;
+    float prevY = 0;
 
-    int i = 0;
-    for (double x = -screen_center.x; x < screen_center.x;
-         x += SAMPLE_RATE, i++) {
-      double y = powf(x, 2) / zoom;
+    double start = screen_center.x - ((float)screenWidth / 2);
+    DrawLine(start, 0, start, screenHeight, GREEN);
+    double end = screen_center.x + ((float)screenWidth / 2);
+    DrawLine(end, 0, end, screenHeight, RED);
+    if (!expr) {
+      EndDrawing();
+      continue;
+    }
+
+    for (double cur_x = start; cur_x < end; cur_x += SAMPLE_RATE, i++) {
+      double in = cur_x / zoom;
+      x = in;
+
+      double out = te_eval(expr);
+      double y = out * zoom;
 
       // y is inverted because of the way the screen coordinates work
-      Vector2 current_point = Vector2Add(screen_center, (Vector2){x, -y});
+      Vector2 current_point =
+          (Vector2){screen_center.x + cur_x, screen_center.y - y};
       samples[i] = current_point;
 
-      // Linear interpolation between sample points
-      if (i > 0) {
-        Vector2 prev_point = samples[i - 1];
-        DrawLineEx(current_point, prev_point, 2.0f, RED);
+      if (i > 2) {
+        DrawSplineBezierQuadratic(samples + i - 2, 3, 2.0, RED);
       }
     }
 
